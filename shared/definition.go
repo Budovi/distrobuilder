@@ -49,6 +49,7 @@ type DefinitionSource struct {
 	Variant    string   `yaml:"variant,omitempty"`
 	Suite      string   `yaml:"suite,omitempty"`
 	AptSources string   `yaml:"apt_sources,omitempty"`
+	Packages   []string `yaml:"packages,omitempty"`
 }
 
 // A DefinitionTargetLXCConfig represents the config part of the metadata.
@@ -188,6 +189,7 @@ func (d *Definition) Validate() error {
 		"debootstrap",
 		"fedora-http",
 		"gentoo-http",
+		"pacman",
 		"ubuntu-http",
 	}
 	if !shared.StringInSlice(strings.TrimSpace(d.Source.Downloader), validDownloaders) {

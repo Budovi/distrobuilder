@@ -22,6 +22,8 @@ func Get(name string) Downloader {
 		return NewFedoraHTTP()
 	case "gentoo-http":
 		return NewGentooHTTP()
+	case "pacman":
+		return NewPacman()
 	case "ubuntu-http":
 		return NewUbuntuHTTP()
 	}
