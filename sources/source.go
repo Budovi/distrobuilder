@@ -12,6 +12,10 @@ func Get(name string) Downloader {
 	switch name {
 	case "alpinelinux-http":
 		return NewAlpineLinuxHTTP()
+	case "alt-http":
+		return NewALTHTTP()
+	case "apertis-http":
+		return NewApertisHTTP()
 	case "archlinux-http":
 		return NewArchLinuxHTTP()
 	case "centos-http":
@@ -26,6 +30,22 @@ func Get(name string) Downloader {
 		return NewPacman()
 	case "ubuntu-http":
 		return NewUbuntuHTTP()
+	case "sabayon-http":
+		return NewSabayonHTTP()
+	case "docker-http":
+		return NewDockerHTTP()
+	case "oraclelinux-http":
+		return NewOracleLinuxHTTP()
+	case "opensuse-http":
+		return NewOpenSUSEHTTP()
+	case "openwrt-http":
+		return NewOpenWrtHTTP()
+	case "plamolinux-http":
+		return NewPlamoLinuxHTTP()
+	case "voidlinux-http":
+		return NewVoidLinuxHTTP()
+	case "funtoo-http":
+		return NewFuntooHTTP()
 	}
 
 	return nil

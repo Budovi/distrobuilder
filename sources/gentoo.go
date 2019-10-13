@@ -1,14 +1,15 @@
 package sources
 
 import (
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	lxd "github.com/lxc/lxd/shared"
 
@@ -25,8 +26,19 @@ func NewGentooHTTP() *GentooHTTP {
 
 // Run downloads a Gentoo stage3 tarball.
 func (s *GentooHTTP) Run(definition shared.Definition, rootfsDir string) error {
-	baseURL := fmt.Sprintf("%s/releases/%s/autobuilds/current-install-%s-minimal",
-		definition.Source.URL, definition.Image.ArchitectureMapped,
+	topLevelArch := definition.Image.ArchitectureMapped
+	if topLevelArch == "i686" {
+		topLevelArch = "x86"
+	} else if strings.HasPrefix(topLevelArch, "arm") {
+		topLevelArch = "arm"
+	} else if strings.HasPrefix(topLevelArch, "ppc") {
+		topLevelArch = "ppc"
+	} else if strings.HasPrefix(topLevelArch, "s390") {
+		topLevelArch = "s390"
+	}
+
+	baseURL := fmt.Sprintf("%s/releases/%s/autobuilds/current-stage3-%s",
+		definition.Source.URL, topLevelArch,
 		definition.Image.ArchitectureMapped)
 	fname, err := s.getLatestBuild(baseURL, definition.Image.ArchitectureMapped)
 	if err != nil {
@@ -44,20 +56,27 @@ func (s *GentooHTTP) Run(definition shared.Definition, rootfsDir string) error {
 		return err
 	}
 
-	if url.Scheme != "https" && len(definition.Source.Keys) == 0 {
+	if !definition.Source.SkipVerification && url.Scheme != "https" &&
+		len(definition.Source.Keys) == 0 {
 		return errors.New("GPG keys are required if downloading from HTTP")
 	}
 
-	err = shared.DownloadSha512(tarball, tarball+".DIGESTS")
+	var fpath string
+
+	if definition.Source.SkipVerification {
+		fpath, err = shared.DownloadHash(definition.Image, tarball, "", nil)
+	} else {
+		fpath, err = shared.DownloadHash(definition.Image, tarball, tarball+".DIGESTS", sha512.New())
+	}
 	if err != nil {
 		return err
 	}
 
 	// Force gpg checks when using http
-	if url.Scheme != "https" {
-		shared.DownloadSha512(tarball+".DIGESTS.asc", "")
+	if !definition.Source.SkipVerification && url.Scheme != "https" {
+		shared.DownloadHash(definition.Image, tarball+".DIGESTS.asc", "", nil)
 		valid, err := shared.VerifyFile(
-			filepath.Join(os.TempDir(), fname+".DIGESTS.asc"),
+			filepath.Join(fpath, fname+".DIGESTS.asc"),
 			"",
 			definition.Source.Keys,
 			definition.Source.Keyserver)
@@ -70,7 +89,7 @@ func (s *GentooHTTP) Run(definition shared.Definition, rootfsDir string) error {
 	}
 
 	// Unpack
-	err = lxd.Unpack(filepath.Join(os.TempDir(), fname), rootfsDir, false, false)
+	err = lxd.Unpack(filepath.Join(fpath, fname), rootfsDir, false, false, nil)
 	if err != nil {
 		return err
 	}
@@ -90,13 +109,24 @@ func (s *GentooHTTP) getLatestBuild(baseURL, arch string) (string, error) {
 		return "", err
 	}
 
-	regex := regexp.MustCompile(fmt.Sprintf("stage3-%s-\\d{8}T\\d{6}Z.tar.xz", arch))
+	// Look for .tar.xz
+	regex := regexp.MustCompile(fmt.Sprintf(">stage3-%s-.*.tar.xz<", arch))
 
 	// Find all stage3 related files
 	matches := regex.FindAllString(string(body), -1)
-	if len(matches) > 1 {
+	if len(matches) > 0 {
 		// Take the first match since they're all the same anyway
-		return matches[0], nil
+		return strings.Trim(matches[0], "<>"), nil
+	}
+
+	// Look for .tar.bz2
+	regex = regexp.MustCompile(fmt.Sprintf(">stage3-%s-.*.tar.bz2<", arch))
+
+	// Find all stage3 related files
+	matches = regex.FindAllString(string(body), -1)
+	if len(matches) > 0 {
+		// Take the first match since they're all the same anyway
+		return strings.Trim(matches[0], "<>"), nil
 	}
 
 	return "", nil

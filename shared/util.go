@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -21,10 +22,12 @@ import (
 
 // EnvVariable represents a environment variable.
 type EnvVariable struct {
-	Key   string
 	Value string
 	Set   bool
 }
+
+// Environment represents a set of environment variables.
+type Environment map[string]EnvVariable
 
 // Copy copies a file.
 func Copy(src, dest string) error {
@@ -76,6 +79,25 @@ func RunScript(content string) error {
 	return cmd.Run()
 }
 
+// GetSignedContent verifies the provided file, and returns its decrypted (plain) content.
+func GetSignedContent(signedFile string, keys []string, keyserver string) ([]byte, error) {
+	keyring, err := CreateGPGKeyring(keyserver, keys)
+	if err != nil {
+		return nil, err
+	}
+
+	gpgDir := path.Dir(keyring)
+	defer os.RemoveAll(gpgDir)
+
+	out, err := exec.Command("gpg", "--homedir", gpgDir, "--keyring", keyring,
+		"--decrypt", signedFile).Output()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get file content: %v", err)
+	}
+
+	return out, nil
+}
+
 // VerifyFile verifies a file using gpg.
 func VerifyFile(signedFile, signatureFile string, keys []string, keyserver string) (bool, error) {
 	keyring, err := CreateGPGKeyring(keyserver, keys)
@@ -102,6 +124,74 @@ func VerifyFile(signedFile, signatureFile string, keys []string, keyserver strin
 	return true, nil
 }
 
+func recvGPGKeys(gpgDir string, keyserver string, keys []string) (bool, error) {
+	args := []string{"--homedir", gpgDir}
+
+	var fingerprints []string
+	var publicKeys []string
+
+	for _, k := range keys {
+		if strings.HasPrefix(strings.TrimSpace(k), "-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+			publicKeys = append(publicKeys, strings.TrimSpace(k))
+		} else {
+			fingerprints = append(fingerprints, strings.TrimSpace(k))
+		}
+	}
+
+	for _, f := range publicKeys {
+		args := append(args, "--import")
+
+		err := lxd.RunCommandWithFds(strings.NewReader(f), nil, "gpg", args...)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	if keyserver != "" {
+		args = append(args, "--keyserver", keyserver)
+	}
+
+	args = append(args, append([]string{"--recv-keys"}, fingerprints...)...)
+
+	_, out, err := lxd.RunCommandSplit(nil, "gpg", args...)
+	if err != nil {
+		return false, err
+	}
+
+	// Verify output
+	var importedKeys []string
+	var missingKeys []string
+	lines := strings.Split(out, "\n")
+
+	for _, l := range lines {
+		if strings.HasPrefix(l, "gpg: key ") && (strings.HasSuffix(l, " imported") || strings.HasSuffix(l, " not changed")) {
+			key := strings.Split(l, " ")
+			importedKeys = append(importedKeys, strings.Split(key[2], ":")[0])
+		}
+	}
+
+	// Figure out which key(s) couldn't be imported
+	if len(importedKeys) < len(fingerprints) {
+		for _, j := range fingerprints {
+			found := false
+
+			for _, k := range importedKeys {
+				if strings.HasSuffix(j, k) {
+					found = true
+				}
+			}
+
+			if !found {
+				missingKeys = append(missingKeys, j)
+			}
+		}
+
+		return false, fmt.Errorf("Failed to import keys: %s", strings.Join(missingKeys, " "))
+	}
+
+	return true, nil
+}
+
 // CreateGPGKeyring creates a new GPG keyring.
 func CreateGPGKeyring(keyserver string, keys []string) (string, error) {
 	gpgDir, err := ioutil.TempDir(os.TempDir(), "distrobuilder.")
@@ -114,22 +204,23 @@ func CreateGPGKeyring(keyserver string, keys []string) (string, error) {
 		return "", err
 	}
 
-	args := []string{"--homedir", gpgDir}
+	var ok bool
 
-	if keyserver != "" {
-		args = append(args, "--keyserver", keyserver)
+	for i := 0; i < 3; i++ {
+		ok, err = recvGPGKeys(gpgDir, keyserver, keys)
+		if ok {
+			break
+		}
+
+		time.Sleep(2 * time.Second)
 	}
 
-	args = append(args, append([]string{"--recv-keys"}, keys...)...)
-
-	out, err := lxd.RunCommand("gpg", args...)
-	if err != nil {
-		os.RemoveAll(gpgDir)
-		return "", fmt.Errorf("Failed to create keyring: %s", out)
+	if !ok {
+		return "", err
 	}
 
 	// Export keys to support gpg1 and gpg2
-	out, err = lxd.RunCommand("gpg", "--homedir", gpgDir, "--export", "--output",
+	out, err := lxd.RunCommand("gpg", "--homedir", gpgDir, "--export", "--output",
 		filepath.Join(gpgDir, "distrobuilder.gpg"))
 	if err != nil {
 		os.RemoveAll(gpgDir)
@@ -244,24 +335,57 @@ func RenderTemplate(template string, iface interface{}) (string, error) {
 
 // SetEnvVariables sets the provided environment variables and returns the
 // old ones.
-func SetEnvVariables(env []EnvVariable) []EnvVariable {
-	oldEnv := make([]EnvVariable, len(env))
+func SetEnvVariables(env Environment) Environment {
+	oldEnv := Environment{}
 
-	for i := 0; i < len(env); i++ {
+	for k, v := range env {
 		// Check whether the env variables are set at the moment
-		oldVal, set := os.LookupEnv(env[i].Key)
+		oldVal, set := os.LookupEnv(k)
 
 		// Store old env variables
-		oldEnv[i].Key = env[i].Key
-		oldEnv[i].Value = oldVal
-		oldEnv[i].Set = set
+		oldEnv[k] = EnvVariable{
+			Value: oldVal,
+			Set:   set,
+		}
 
-		if env[i].Set {
-			os.Setenv(env[i].Key, env[i].Value)
+		if v.Set {
+			os.Setenv(k, v.Value)
 		} else {
-			os.Unsetenv(env[i].Key)
+			os.Unsetenv(k)
 		}
 	}
 
 	return oldEnv
+}
+
+// GetTargetDir returns the path to which source files are downloaded.
+func GetTargetDir(def DefinitionImage) string {
+	targetDir := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s-%s", def.Distribution, def.Release, def.ArchitectureMapped))
+	targetDir = strings.Replace(targetDir, " ", "", -1)
+	targetDir = strings.ToLower(targetDir)
+
+	return targetDir
+}
+
+func getChecksum(fname string, hashLen int, r io.Reader) string {
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		if !strings.Contains(scanner.Text(), fname) {
+			continue
+		}
+
+		for _, s := range strings.Split(scanner.Text(), " ") {
+			m, _ := regexp.MatchString("[[:xdigit:]]+", s)
+			if !m {
+				continue
+			}
+
+			if hashLen == 0 || hashLen == len(strings.TrimSpace(s)) {
+				return s
+			}
+		}
+	}
+
+	return ""
 }

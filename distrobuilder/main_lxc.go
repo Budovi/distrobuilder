@@ -17,11 +17,6 @@ type cmdLXC struct {
 	global   *cmdGlobal
 }
 
-type cmdBuildLXC struct {
-	cmd    *cobra.Command
-	global *cmdGlobal
-}
-
 func (c *cmdLXC) commandBuild() *cobra.Command {
 	c.cmdBuild = &cobra.Command{
 		Use:     "build-lxc <filename|-> [target dir]",
@@ -59,6 +54,11 @@ func (c *cmdLXC) run(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if len(file.Variants) > 0 && !lxd.StringInSlice(
+			c.global.definition.Image.Variant, file.Variants) {
+			continue
+		}
+
 		err := generator.RunLXC(c.global.flagCacheDir, c.global.sourceDir, img,
 			file)
 		if err != nil {
@@ -66,7 +66,8 @@ func (c *cmdLXC) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	exitChroot, err := setupChroot(c.global.sourceDir)
+	exitChroot, err := shared.SetupChroot(c.global.sourceDir,
+		c.global.definition.Environment)
 	if err != nil {
 		return err
 	}

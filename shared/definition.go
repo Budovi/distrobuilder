@@ -8,19 +8,58 @@ import (
 	"strings"
 	"time"
 
-	lxd "github.com/lxc/lxd/shared"
-	lxdarch "github.com/lxc/lxd/shared/osarch"
-
 	"github.com/lxc/lxd/shared"
+	lxdarch "github.com/lxc/lxd/shared/osarch"
 )
 
-// A DefinitionPackages list packages which are to be either installed or
-// removed.
+// A DefinitionFilter defines filters for various actions.
+type DefinitionFilter struct {
+	Releases      []string `yaml:"releases,omitempty"`
+	Architectures []string `yaml:"architectures,omitempty"`
+	Variants      []string `yaml:"variants,omitempty"`
+}
+
+// A DefinitionPackagesSet is a set of packages which are to be installed
+// or removed.
+type DefinitionPackagesSet struct {
+	DefinitionFilter `yaml:",inline"`
+	Packages         []string `yaml:"packages"`
+	Action           string   `yaml:"action"`
+}
+
+// A DefinitionPackagesRepository contains data of a specific repository
+type DefinitionPackagesRepository struct {
+	DefinitionFilter
+	Name string `yaml:"name"`           // Name of the repository
+	URL  string `yaml:"url"`            // URL (may differ based on manager)
+	Type string `yaml:"type,omitempty"` // For distros that have more than one repository manager
+	Key  string `yaml:"key,omitempty"`  // GPG armored keyring
+}
+
+// CustomManagerCmd represents a command for a custom manager.
+type CustomManagerCmd struct {
+	Command string   `yaml:"cmd"`
+	Flags   []string `yaml:"flags,omitempty"`
+}
+
+// DefinitionPackagesCustomManager represents a custom package manager.
+type DefinitionPackagesCustomManager struct {
+	Clean   CustomManagerCmd `yaml:"clean"`
+	Install CustomManagerCmd `yaml:"install"`
+	Remove  CustomManagerCmd `yaml:"remove"`
+	Refresh CustomManagerCmd `yaml:"refresh"`
+	Update  CustomManagerCmd `yaml:"update"`
+	Flags   []string         `yaml:"flags,omitempty"`
+}
+
+// A DefinitionPackages represents a package handler.
 type DefinitionPackages struct {
-	Manager string   `yaml:"manager"`
-	Install []string `yaml:"install,omitempty"`
-	Remove  []string `yaml:"remove,omitempty"`
-	Update  bool     `yaml:"update,omitempty"`
+	Manager       string                           `yaml:"manager,omitempty"`
+	CustomManager *DefinitionPackagesCustomManager `yaml:"custom-manager,omitempty"`
+	Update        bool                             `yaml:"update,omitempty"`
+	Cleanup       bool                             `yaml:"cleanup,omitempty"`
+	Sets          []DefinitionPackagesSet          `yaml:"sets,omitempty"`
+	Repositories  []DefinitionPackagesRepository   `yaml:"repositories,omitempty"`
 }
 
 // A DefinitionImage represents the image.
@@ -42,14 +81,16 @@ type DefinitionImage struct {
 
 // A DefinitionSource specifies the download type and location
 type DefinitionSource struct {
-	Downloader string   `yaml:"downloader"`
-	URL        string   `yaml:"url,omitempty"`
-	Keys       []string `yaml:"keys,omitempty"`
-	Keyserver  string   `yaml:"keyserver,omitempty"`
-	Variant    string   `yaml:"variant,omitempty"`
-	Suite      string   `yaml:"suite,omitempty"`
-	AptSources string   `yaml:"apt_sources,omitempty"`
-	Packages   []string `yaml:"packages,omitempty"`
+	Downloader       string   `yaml:"downloader"`
+	URL              string   `yaml:"url,omitempty"`
+	Keys             []string `yaml:"keys,omitempty"`
+	Keyserver        string   `yaml:"keyserver,omitempty"`
+	Variant          string   `yaml:"variant,omitempty"`
+	Suite            string   `yaml:"suite,omitempty"`
+	SameAs           string   `yaml:"same_as,omitempty"`
+	AptSources       string   `yaml:"apt_sources,omitempty"`
+	SkipVerification bool     `yaml:"skip_verification,omitempty"`
+	EarlyPackages    []string `yaml:"early_packages,omitempty"`
 }
 
 // A DefinitionTargetLXCConfig represents the config part of the metadata.
@@ -73,18 +114,27 @@ type DefinitionTarget struct {
 
 // A DefinitionFile represents a file which is to be created inside to chroot.
 type DefinitionFile struct {
-	Generator string   `yaml:"generator"`
-	Path      string   `yaml:"path,omitempty"`
-	Content   string   `yaml:"content,omitempty"`
-	Releases  []string `yaml:"releases,omitempty"`
+	DefinitionFilter `yaml:",inline"`
+	Generator        string                 `yaml:"generator"`
+	Path             string                 `yaml:"path,omitempty"`
+	Content          string                 `yaml:"content,omitempty"`
+	Name             string                 `yaml:"name,omitempty"`
+	Template         DefinitionFileTemplate `yaml:"template,omitempty"`
+	Templated        bool                   `yaml:"templated,omitempty"`
+}
+
+// A DefinitionFileTemplate represents the settings used by generators
+type DefinitionFileTemplate struct {
+	Properties map[string]string `yaml:"properties,omitempty"`
+	When       []string          `yaml:"when,omitempty"`
 }
 
 // A DefinitionAction specifies a custom action (script) which is to be run after
 // a certain action.
 type DefinitionAction struct {
-	Trigger  string   `yaml:"trigger"`
-	Action   string   `yaml:"action"`
-	Releases []string `yaml:"releases,omitempty"`
+	DefinitionFilter `yaml:",inline"`
+	Trigger          string `yaml:"trigger"`
+	Action           string `yaml:"action"`
 }
 
 // DefinitionMappings defines custom mappings.
@@ -93,19 +143,32 @@ type DefinitionMappings struct {
 	ArchitectureMap string            `yaml:"architecture_map,omitempty"`
 }
 
+// DefinitionEnvVars defines custom environment variables.
+type DefinitionEnvVars struct {
+	Key   string `yaml:"key"`
+	Value string `yaml:"value"`
+}
+
+// DefinitionEnv represents the config part of the environment section.
+type DefinitionEnv struct {
+	ClearDefaults bool                `yaml:"clear_defaults,omitempty"`
+	EnvVariables  []DefinitionEnvVars `yaml:"variables,omitempty"`
+}
+
 // A Definition a definition.
 type Definition struct {
-	Image    DefinitionImage    `yaml:"image"`
-	Source   DefinitionSource   `yaml:"source"`
-	Targets  DefinitionTarget   `yaml:"targets,omitempty"`
-	Files    []DefinitionFile   `yaml:"files,omitempty"`
-	Packages DefinitionPackages `yaml:"packages,omitempty"`
-	Actions  []DefinitionAction `yaml:"actions,omitempty"`
-	Mappings DefinitionMappings `yaml:"mappings,omitempty"`
+	Image       DefinitionImage    `yaml:"image"`
+	Source      DefinitionSource   `yaml:"source"`
+	Targets     DefinitionTarget   `yaml:"targets,omitempty"`
+	Files       []DefinitionFile   `yaml:"files,omitempty"`
+	Packages    DefinitionPackages `yaml:"packages,omitempty"`
+	Actions     []DefinitionAction `yaml:"actions,omitempty"`
+	Mappings    DefinitionMappings `yaml:"mappings,omitempty"`
+	Environment DefinitionEnv      `yaml:"environment,omitempty"`
 }
 
 // SetValue writes the provided value to a field represented by the yaml tag 'key'.
-func (d *Definition) SetValue(key string, value interface{}) error {
+func (d *Definition) SetValue(key string, value string) error {
 	// Walk through the definition and find the field with the given key
 	field, err := getFieldByTag(reflect.ValueOf(d).Elem(), reflect.TypeOf(d).Elem(), key)
 	if err != nil {
@@ -117,22 +180,29 @@ func (d *Definition) SetValue(key string, value interface{}) error {
 		return fmt.Errorf("Cannot set value for %s", key)
 	}
 
-	if reflect.TypeOf(value).Kind() != field.Kind() {
-		return fmt.Errorf("Cannot assign %s value to %s",
-			reflect.TypeOf(value).Kind(), field.Kind())
-	}
-
-	switch reflect.TypeOf(value).Kind() {
+	switch field.Kind() {
 	case reflect.Bool:
-		field.SetBool(value.(bool))
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		field.SetBool(v)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		field.SetInt(value.(int64))
+		v, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		field.SetInt(v)
 	case reflect.String:
-		field.SetString(value.(string))
+		field.SetString(value)
 	case reflect.Uint, reflect.Uintptr, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		field.SetUint(value.(uint64))
+		v, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		field.SetUint(v)
 	default:
-		return fmt.Errorf("Unknown value type %s", reflect.TypeOf(value).Kind())
+		return fmt.Errorf("Unsupported type '%s'", field.Kind())
 	}
 
 	return nil
@@ -184,6 +254,8 @@ func (d *Definition) Validate() error {
 
 	validDownloaders := []string{
 		"alpinelinux-http",
+		"alt-http",
+		"apertis-http",
 		"archlinux-http",
 		"centos-http",
 		"debootstrap",
@@ -191,29 +263,74 @@ func (d *Definition) Validate() error {
 		"gentoo-http",
 		"pacman",
 		"ubuntu-http",
+		"sabayon-http",
+		"docker-http",
+		"oraclelinux-http",
+		"opensuse-http",
+		"openwrt-http",
+		"plamolinux-http",
+		"voidlinux-http",
+		"funtoo-http",
 	}
 	if !shared.StringInSlice(strings.TrimSpace(d.Source.Downloader), validDownloaders) {
 		return fmt.Errorf("source.downloader must be one of %v", validDownloaders)
 	}
 
-	validManagers := []string{
-		"apk",
-		"apt",
-		"dnf",
-		"pacman",
-		"portage",
-		"yum",
-	}
-	if !shared.StringInSlice(strings.TrimSpace(d.Packages.Manager), validManagers) {
-		return fmt.Errorf("packages.manager must be one of %v", validManagers)
+	if d.Packages.Manager != "" {
+		validManagers := []string{
+			"apk",
+			"apt",
+			"dnf",
+			"egoportage",
+			"opkg",
+			"pacman",
+			"portage",
+			"yum",
+			"equo",
+			"xbps",
+			"zypper",
+		}
+		if !shared.StringInSlice(strings.TrimSpace(d.Packages.Manager), validManagers) {
+			return fmt.Errorf("packages.manager must be one of %v", validManagers)
+		}
+
+		if d.Packages.CustomManager != nil {
+			return fmt.Errorf("cannot have both packages.manager and packages.custom-manager set")
+		}
+	} else {
+		if d.Packages.CustomManager == nil {
+			return fmt.Errorf("packages.manager or packages.custom-manager needs to be set")
+		}
+
+		if d.Packages.CustomManager.Clean.Command == "" {
+			return fmt.Errorf("packages.custom-manager requires a clean command")
+		}
+
+		if d.Packages.CustomManager.Install.Command == "" {
+			return fmt.Errorf("packages.custom-manager requires an install command")
+		}
+
+		if d.Packages.CustomManager.Remove.Command == "" {
+			return fmt.Errorf("packages.custom-manager requires a remove command")
+		}
+
+		if d.Packages.CustomManager.Refresh.Command == "" {
+			return fmt.Errorf("packages.custom-manager requires a refresh command")
+		}
+
+		if d.Packages.CustomManager.Update.Command == "" {
+			return fmt.Errorf("packages.custom-manager requires an update command")
+		}
 	}
 
 	validGenerators := []string{
 		"dump",
+		"template",
 		"hostname",
 		"hosts",
 		"remove",
 		"upstart-tty",
+		"cloud-init",
 	}
 
 	for _, file := range d.Files {
@@ -224,8 +341,14 @@ func (d *Definition) Validate() error {
 
 	validMappings := []string{
 		"alpinelinux",
+		"altlinux",
+		"archlinux",
 		"centos",
 		"debian",
+		"gentoo",
+		"plamolinux",
+		"voidlinux",
+		"funtoo",
 	}
 
 	architectureMap := strings.TrimSpace(d.Mappings.ArchitectureMap)
@@ -245,6 +368,17 @@ func (d *Definition) Validate() error {
 	for _, action := range d.Actions {
 		if !shared.StringInSlice(action.Trigger, validTriggers) {
 			return fmt.Errorf("actions.*.trigger must be one of %v", validTriggers)
+		}
+	}
+
+	validPackageActions := []string{
+		"install",
+		"remove",
+	}
+
+	for _, set := range d.Packages.Sets {
+		if !shared.StringInSlice(set.Action, validPackageActions) {
+			return fmt.Errorf("packages.*.set.*.action must be one of %v", validPackageActions)
 		}
 	}
 
@@ -289,7 +423,15 @@ func (d *Definition) GetRunnableActions(trigger string) []DefinitionAction {
 			continue
 		}
 
-		if len(action.Releases) > 0 && !lxd.StringInSlice(d.Image.Release, action.Releases) {
+		if len(action.Releases) > 0 && !shared.StringInSlice(d.Image.Release, action.Releases) {
+			continue
+		}
+
+		if len(action.Architectures) > 0 && !shared.StringInSlice(d.Image.ArchitectureMapped, action.Architectures) {
+			continue
+		}
+
+		if len(action.Variants) > 0 && !shared.StringInSlice(d.Image.Variant, action.Variants) {
 			continue
 		}
 

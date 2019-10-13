@@ -1,10 +1,13 @@
 package sources
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+
+	lxd "github.com/lxc/lxd/shared"
 
 	"github.com/lxc/distrobuilder/shared"
 )
@@ -31,6 +34,14 @@ func (s *Debootstrap) Run(definition shared.Definition, rootfsDir string) error 
 		args = append(args, "--arch", definition.Image.ArchitectureMapped)
 	}
 
+	if definition.Source.SkipVerification {
+		args = append(args, "--no-check-gpg")
+	}
+
+	if len(definition.Source.EarlyPackages) > 0 {
+		args = append(args, fmt.Sprintf("--include=%s", strings.Join(definition.Source.EarlyPackages, ",")))
+	}
+
 	if len(definition.Source.Keys) > 0 {
 		keyring, err := shared.CreateGPGKeyring(definition.Source.Keyserver, definition.Source.Keys)
 		if err != nil {
@@ -41,22 +52,29 @@ func (s *Debootstrap) Run(definition shared.Definition, rootfsDir string) error 
 		args = append(args, "--keyring", keyring)
 	}
 
-	args = append(args, definition.Image.Release, rootfsDir)
+	// If source.suite is set, debootstrap will use this instead of
+	// image.release as its first positional argument (SUITE). This is important
+	// for derivatives which don't have their own sources, e.g. Linux Mint.
+	if definition.Source.Suite != "" {
+		args = append(args, definition.Source.Suite, rootfsDir)
+	} else {
+		args = append(args, definition.Image.Release, rootfsDir)
+	}
 
 	if definition.Source.URL != "" {
 		args = append(args, definition.Source.URL)
 	}
 
-	// If definition.Source.Suite is set, create a symlink in /usr/share/debootstrap/scripts
-	// pointing release to definition.Source.Suite.
-	if definition.Source.Suite != "" {
-		link := filepath.Join("/usr/share/debootstrap/scripts",
-			definition.Image.Release)
-		err := os.Symlink(definition.Source.Suite, link)
+	// If definition.Source.SameAs is set, create a symlink in /usr/share/debootstrap/scripts
+	// pointing release to definition.Source.SameAs.
+	scriptPath := filepath.Join("/usr/share/debootstrap/scripts", definition.Image.Release)
+	if !lxd.PathExists(scriptPath) && definition.Source.SameAs != "" {
+		err := os.Symlink(definition.Source.SameAs, scriptPath)
 		if err != nil {
 			return err
 		}
-		defer os.Remove(link)
+
+		defer os.Remove(scriptPath)
 	}
 
 	err := shared.RunCommand("debootstrap", args...)

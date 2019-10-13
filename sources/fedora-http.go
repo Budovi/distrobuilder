@@ -17,9 +17,7 @@ import (
 )
 
 // FedoraHTTP represents the Fedora HTTP downloader.
-type FedoraHTTP struct {
-	fname string
-}
+type FedoraHTTP struct{}
 
 // NewFedoraHTTP creates a new FedoraHTTP instance.
 func NewFedoraHTTP() *FedoraHTTP {
@@ -41,14 +39,14 @@ func (s *FedoraHTTP) Run(definition shared.Definition, rootfsDir string) error {
 		definition.Image.Release, build, definition.Image.ArchitectureMapped)
 
 	// Download image
-	err = shared.DownloadSha256(fmt.Sprintf("%s/%s/%s/images/%s",
-		baseURL, definition.Image.Release, build, fname), "")
+	fpath, err := shared.DownloadHash(definition.Image, fmt.Sprintf("%s/%s/%s/images/%s",
+		baseURL, definition.Image.Release, build, fname), "", nil)
 	if err != nil {
 		return err
 	}
 
 	// Unpack the base image
-	err = lxd.Unpack(filepath.Join(os.TempDir(), fname), rootfsDir, false, false)
+	err = lxd.Unpack(filepath.Join(fpath, fname), rootfsDir, false, false, nil)
 	if err != nil {
 		return err
 	}
@@ -90,8 +88,7 @@ func (s *FedoraHTTP) unpackLayers(rootfsDir string) error {
 	// remove files not relevant to the image.
 	for _, manifest := range manifests {
 		for _, layer := range manifest.Layers {
-			err := lxd.Unpack(filepath.Join(rootfsDir, layer), rootfsDir,
-				false, false)
+			err := lxd.Unpack(filepath.Join(rootfsDir, layer), rootfsDir, false, false, nil)
 			if err != nil {
 				return err
 			}

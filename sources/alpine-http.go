@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -23,32 +24,61 @@ func NewAlpineLinuxHTTP() *AlpineLinuxHTTP {
 
 // Run downloads an Alpine Linux mini root filesystem.
 func (s *AlpineLinuxHTTP) Run(definition shared.Definition, rootfsDir string) error {
-	fname := fmt.Sprintf("alpine-minirootfs-%s-%s.tar.gz", definition.Image.Release,
+	releaseFull := definition.Image.Release
+	releaseShort := releaseFull
+
+	if definition.Image.Release == "edge" {
+		if definition.Source.SameAs == "" {
+			return fmt.Errorf("You can't use Alpine edge without setting same_as")
+		}
+
+		releaseFull = definition.Source.SameAs
+		releaseShort = releaseFull
+	}
+
+	releaseField := strings.Split(releaseFull, ".")
+	if len(releaseField) == 2 {
+		releaseShort = fmt.Sprintf("v%s", releaseFull)
+		releaseFull = fmt.Sprintf("%s.0", releaseFull)
+	} else if len(releaseField) == 3 {
+		releaseShort = fmt.Sprintf("v%s.%s", releaseField[0], releaseField[1])
+	} else {
+		return fmt.Errorf("Bad Alpine release: %s", releaseFull)
+	}
+
+	fname := fmt.Sprintf("alpine-minirootfs-%s-%s.tar.gz", releaseFull,
 		definition.Image.ArchitectureMapped)
-	tarball := fmt.Sprintf("%s/v%s/releases/%s/%s", definition.Source.URL,
-		strings.Join(strings.Split(definition.Image.Release, ".")[0:2], "."),
-		definition.Image.ArchitectureMapped, fname)
+
+	tarball := fmt.Sprintf("%s/%s/releases/%s/%s", definition.Source.URL,
+		releaseShort, definition.Image.ArchitectureMapped, fname)
 
 	url, err := url.Parse(tarball)
 	if err != nil {
 		return err
 	}
 
-	if url.Scheme != "https" && len(definition.Source.Keys) == 0 {
+	if !definition.Source.SkipVerification && url.Scheme != "https" &&
+		len(definition.Source.Keys) == 0 {
 		return errors.New("GPG keys are required if downloading from HTTP")
 	}
 
-	err = shared.DownloadSha256(tarball, tarball+".sha256")
+	var fpath string
+
+	if definition.Source.SkipVerification {
+		fpath, err = shared.DownloadHash(definition.Image, tarball, "", nil)
+	} else {
+		fpath, err = shared.DownloadHash(definition.Image, tarball, tarball+".sha256", sha256.New())
+	}
 	if err != nil {
 		return err
 	}
 
 	// Force gpg checks when using http
-	if url.Scheme != "https" {
-		shared.DownloadSha256(tarball+".asc", "")
+	if !definition.Source.SkipVerification && url.Scheme != "https" {
+		shared.DownloadHash(definition.Image, tarball+".asc", "", nil)
 		valid, err := shared.VerifyFile(
-			filepath.Join(os.TempDir(), fname),
-			filepath.Join(os.TempDir(), fname+".asc"),
+			filepath.Join(fpath, fname),
+			filepath.Join(fpath, fname+".asc"),
 			definition.Source.Keys,
 			definition.Source.Keyserver)
 		if err != nil {
@@ -60,7 +90,36 @@ func (s *AlpineLinuxHTTP) Run(definition shared.Definition, rootfsDir string) er
 	}
 
 	// Unpack
-	err = lxd.Unpack(filepath.Join(os.TempDir(), fname), rootfsDir, false, false)
+	err = lxd.Unpack(filepath.Join(fpath, fname), rootfsDir, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	// Handle edge builds
+	if definition.Image.Release == "edge" {
+		// Upgrade to edge
+		exitChroot, err := shared.SetupChroot(rootfsDir, definition.Environment)
+		if err != nil {
+			return err
+		}
+
+		err = shared.RunCommand("sed", "-i", "-e", "s/v[[:digit:]]\\.[[:digit:]]/edge/g", "/etc/apk/repositories")
+		if err != nil {
+			exitChroot()
+			return err
+		}
+
+		err = shared.RunCommand("apk", "upgrade", "--update-cache", "--available")
+		if err != nil {
+			exitChroot()
+			return err
+		}
+
+		exitChroot()
+	}
+
+	// Fix bad permissions in Alpine tarballs
+	err = os.Chmod(rootfsDir, 0755)
 	if err != nil {
 		return err
 	}

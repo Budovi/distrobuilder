@@ -2,10 +2,11 @@ package shared
 
 import (
 	"log"
-	"regexp"
 	"testing"
 
 	"github.com/lxc/lxd/shared"
+	"github.com/stretchr/testify/require"
+	yaml "gopkg.in/yaml.v2"
 )
 
 func TestSetDefinitionDefaults(t *testing.T) {
@@ -15,13 +16,8 @@ func TestSetDefinitionDefaults(t *testing.T) {
 
 	uname, _ := shared.Uname()
 
-	if def.Image.Architecture != uname.Machine {
-		t.Fatalf("Expected image.arch to be '%s', got '%s'", uname.Machine, def.Image.Architecture)
-	}
-
-	if def.Image.Expiry != "30d" {
-		t.Fatalf("Expected image.expiry to be '%s', got '%s'", "30d", def.Image.Expiry)
-	}
+	require.Equal(t, uname.Machine, def.Image.Architecture)
+	require.Equal(t, "30d", def.Image.Expiry)
 }
 
 func TestValidateDefinition(t *testing.T) {
@@ -88,6 +84,39 @@ func TestValidateDefinition(t *testing.T) {
 				},
 				Packages: DefinitionPackages{
 					Manager: "apt",
+				},
+			},
+			"",
+			false,
+		},
+		{
+			"valid Defintion with packages.custom-manager",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+				},
+				Packages: DefinitionPackages{
+					CustomManager: &DefinitionPackagesCustomManager{
+						Install: CustomManagerCmd{
+							Command: "install",
+						},
+						Remove: CustomManagerCmd{
+							Command: "remove",
+						},
+						Clean: CustomManagerCmd{
+							Command: "clean",
+						},
+						Update: CustomManagerCmd{
+							Command: "update",
+						},
+						Refresh: CustomManagerCmd{
+							Command: "refresh",
+						},
+					},
 				},
 			},
 			"",
@@ -184,6 +213,172 @@ func TestValidateDefinition(t *testing.T) {
 			true,
 		},
 		{
+			"missing clean command in packages.custom-manager",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					CustomManager: &DefinitionPackagesCustomManager{},
+				},
+			},
+			"packages.custom-manager requires a clean command",
+			true,
+		},
+		{
+			"missing install command in packages.custom-manager",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					CustomManager: &DefinitionPackagesCustomManager{
+						Clean: CustomManagerCmd{
+							Command: "clean",
+						},
+					},
+				},
+			},
+			"packages.custom-manager requires an install command",
+			true,
+		},
+		{
+			"missing remove command in packages.custom-manager",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					CustomManager: &DefinitionPackagesCustomManager{
+						Clean: CustomManagerCmd{
+							Command: "clean",
+						},
+						Install: CustomManagerCmd{
+							Command: "install",
+						},
+					},
+				},
+			},
+			"packages.custom-manager requires a remove command",
+			true,
+		},
+		{
+			"missing refresh command in packages.custom-manager",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					CustomManager: &DefinitionPackagesCustomManager{
+						Clean: CustomManagerCmd{
+							Command: "clean",
+						},
+						Install: CustomManagerCmd{
+							Command: "install",
+						},
+						Remove: CustomManagerCmd{
+							Command: "remove",
+						},
+					},
+				},
+			},
+			"packages.custom-manager requires a refresh command",
+			true,
+		},
+		{
+			"missing update command in packages.custom-manager",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					CustomManager: &DefinitionPackagesCustomManager{
+						Clean: CustomManagerCmd{
+							Command: "clean",
+						},
+						Install: CustomManagerCmd{
+							Command: "install",
+						},
+						Remove: CustomManagerCmd{
+							Command: "remove",
+						},
+						Refresh: CustomManagerCmd{
+							Command: "refresh",
+						},
+					},
+				},
+			},
+			"packages.custom-manager requires an update command",
+			true,
+		},
+		{
+			"package.manager and package.custom-manager set",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					Manager:       "apt",
+					CustomManager: &DefinitionPackagesCustomManager{},
+				},
+			},
+			"cannot have both packages.manager and packages.custom-manager set",
+			true,
+		},
+		{
+			"package.manager and package.custom-manager unset",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{},
+			},
+			"packages.manager or packages.custom-manager needs to be set",
+			true,
+		},
+		{
 			"invalid action trigger",
 			Definition{
 				Image: DefinitionImage{
@@ -207,22 +402,40 @@ func TestValidateDefinition(t *testing.T) {
 			"actions\\.\\*\\.trigger must be one of .+",
 			true,
 		},
+		{
+			"invalid package action",
+			Definition{
+				Image: DefinitionImage{
+					Distribution: "ubuntu",
+					Release:      "artful",
+				},
+				Source: DefinitionSource{
+					Downloader: "debootstrap",
+					URL:        "https://ubuntu.com",
+					Keys:       []string{"0xCODE"},
+				},
+				Packages: DefinitionPackages{
+					Manager: "apt",
+					Sets: []DefinitionPackagesSet{
+						{
+							Action: "update",
+						},
+					},
+				},
+			},
+			"packages\\.\\*\\.set\\.\\*\\.action must be one of .+",
+			true,
+		},
 	}
 
 	for i, tt := range tests {
 		log.Printf("Running test #%d: %s", i, tt.name)
 		tt.definition.SetDefaults()
 		err := tt.definition.Validate()
-		if !tt.shouldFail && err != nil {
-			t.Fatalf("Validation failed: %s", err)
-		} else if tt.shouldFail {
-			if err == nil {
-				t.Fatal("Expected failure")
-			}
-			match, _ := regexp.MatchString(tt.expected, err.Error())
-			if !match {
-				t.Fatalf("Validation failed: Expected '%s', got '%s'", tt.expected, err.Error())
-			}
+		if tt.shouldFail {
+			require.Regexp(t, tt.expected, err)
+		} else {
+			require.NoError(t, err)
 		}
 	}
 }
@@ -234,9 +447,10 @@ func TestDefinitionSetValue(t *testing.T) {
 			Release:      "artful",
 		},
 		Source: DefinitionSource{
-			Downloader: "debootstrap",
-			URL:        "https://ubuntu.com",
-			Keys:       []string{"0xCODE"},
+			Downloader:       "debootstrap",
+			URL:              "https://ubuntu.com",
+			Keys:             []string{"0xCODE"},
+			SkipVerification: true,
 		},
 		Packages: DefinitionPackages{
 			Manager: "apt",
@@ -254,30 +468,38 @@ func TestDefinitionSetValue(t *testing.T) {
 	}
 
 	err := d.SetValue("image.release", "bionic")
-	if err != nil {
-		t.Fatalf("Unexpected error: %s", err)
-	}
-	if d.Image.Release != "bionic" {
-		t.Fatalf("Expected '%s', got '%s'", "bionic", d.Image.Release)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "bionic", d.Image.Release)
 
 	err = d.SetValue("actions.0.trigger", "post-files")
-	if err != nil {
-		t.Fatalf("Unexpected error: %s", err)
-	}
-	if d.Actions[0].Trigger != "post-files" {
-		t.Fatalf("Expected '%s', got '%s'", "post-files", d.Actions[0].Trigger)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "post-files", d.Actions[0].Trigger)
 
 	// Index out of bounds
 	err = d.SetValue("actions.3.trigger", "post-files")
-	if err == nil || err.Error() != "Index out of range" {
-		t.Fatal("Expected index out of range")
-	}
+	require.EqualError(t, err, "Index out of range")
 
 	// Nonsense
 	err = d.SetValue("image", "[foo: bar]")
-	if err == nil || err.Error() != "Cannot assign string value to struct" {
-		t.Fatal("Expected unsupported assignment")
-	}
+	require.EqualError(t, err, "Unsupported type 'struct'")
+
+	err = d.SetValue("source.skip_verification", "true")
+	require.NoError(t, err)
+	require.Equal(t, true, d.Source.SkipVerification)
+}
+
+func TestDefinitionFilter(t *testing.T) {
+	input := `packages:
+  sets:
+  - packages:
+    - foo
+    architectures:
+    - amd64`
+	def := Definition{}
+
+	err := yaml.Unmarshal([]byte(input), &def)
+	require.NoError(t, err)
+
+	require.Contains(t, def.Packages.Sets[0].Packages, "foo")
+	require.Contains(t, def.Packages.Sets[0].Architectures, "amd64")
 }

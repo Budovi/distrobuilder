@@ -7,10 +7,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-
-	lxd "github.com/lxc/lxd/shared"
+	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/lxc/distrobuilder/shared"
+
+	lxd "github.com/lxc/lxd/shared"
+	"gopkg.in/antchfx/htmlquery.v1"
 )
 
 // ArchLinuxHTTP represents the Arch Linux downloader.
@@ -23,32 +27,56 @@ func NewArchLinuxHTTP() *ArchLinuxHTTP {
 
 // Run downloads an Arch Linux tarball.
 func (s *ArchLinuxHTTP) Run(definition shared.Definition, rootfsDir string) error {
-	fname := fmt.Sprintf("archlinux-bootstrap-%s-%s.tar.gz",
-		definition.Image.Release, definition.Image.ArchitectureMapped)
-	tarball := fmt.Sprintf("%s/%s/%s", definition.Source.URL,
-		definition.Image.Release, fname)
+	release := definition.Image.Release
+
+	// Releases are only available for the x86_64 architecture. ARM only has
+	// a "latest" tarball.
+	if definition.Image.ArchitectureMapped == "x86_64" && release == "" {
+		var err error
+
+		// Get latest release
+		release, err = s.getLatestRelease(definition.Source.URL, definition.Image.ArchitectureMapped)
+		if err != nil {
+			return err
+		}
+	}
+
+	var fname string
+	var tarball string
+
+	if definition.Image.ArchitectureMapped == "x86_64" {
+		fname = fmt.Sprintf("archlinux-bootstrap-%s-%s.tar.gz",
+			release, definition.Image.ArchitectureMapped)
+		tarball = fmt.Sprintf("%s/%s/%s", definition.Source.URL,
+			release, fname)
+	} else {
+		fname = fmt.Sprintf("ArchLinuxARM-%s-latest.tar.gz",
+			definition.Image.ArchitectureMapped)
+		tarball = fmt.Sprintf("%s/os/%s", definition.Source.URL, fname)
+	}
 
 	url, err := url.Parse(tarball)
 	if err != nil {
 		return err
 	}
 
-	if url.Scheme != "https" && len(definition.Source.Keys) == 0 {
+	if !definition.Source.SkipVerification && url.Scheme != "https" &&
+		len(definition.Source.Keys) == 0 {
 		return errors.New("GPG keys are required if downloading from HTTP")
 	}
 
-	err = shared.DownloadSha256(tarball, "")
+	fpath, err := shared.DownloadHash(definition.Image, tarball, "", nil)
 	if err != nil {
 		return err
 	}
 
 	// Force gpg checks when using http
-	if url.Scheme != "https" {
-		shared.DownloadSha256(tarball+".sig", "")
+	if !definition.Source.SkipVerification && url.Scheme != "https" {
+		shared.DownloadHash(definition.Image, tarball+".sig", "", nil)
 
 		valid, err := shared.VerifyFile(
-			filepath.Join(os.TempDir(), fname),
-			filepath.Join(os.TempDir(), fname+".sig"),
+			filepath.Join(fpath, fname),
+			filepath.Join(fpath, fname+".sig"),
 			definition.Source.Keys,
 			definition.Source.Keyserver)
 		if err != nil {
@@ -60,12 +88,12 @@ func (s *ArchLinuxHTTP) Run(definition shared.Definition, rootfsDir string) erro
 	}
 
 	// Unpack
-	err = lxd.Unpack(filepath.Join(os.TempDir(), fname), rootfsDir, false, false)
+	err = lxd.Unpack(filepath.Join(fpath, fname), rootfsDir, false, false, nil)
 	if err != nil {
 		return err
 	}
 
-	// Move everything inside 'root.x86_64' (which was is the tarball) to its
+	// Move everything inside 'root.<architecture>' (which was is the tarball) to its
 	// parent directory
 	files, err := filepath.Glob(fmt.Sprintf("%s/*", filepath.Join(rootfsDir,
 		"root."+definition.Image.ArchitectureMapped)))
@@ -80,6 +108,32 @@ func (s *ArchLinuxHTTP) Run(definition shared.Definition, rootfsDir string) erro
 		}
 	}
 
-	return os.RemoveAll(filepath.Join(rootfsDir, "root",
+	return os.RemoveAll(filepath.Join(rootfsDir, "root."+
 		definition.Image.ArchitectureMapped))
+}
+
+func (s *ArchLinuxHTTP) getLatestRelease(URL string, arch string) (string, error) {
+	doc, err := htmlquery.LoadURL(URL)
+	if err != nil {
+		return "", err
+	}
+
+	re := regexp.MustCompile(`^\d{4}\.\d{2}\.\d{2}/?$`)
+
+	var releases []string
+
+	for _, node := range htmlquery.Find(doc, `//a[@href]/text()`) {
+		if re.MatchString(node.Data) {
+			releases = append(releases, strings.TrimSuffix(node.Data, "/"))
+		}
+	}
+
+	if len(releases) == 0 {
+		return "", fmt.Errorf("Failed to determine latest release")
+	}
+
+	// Sort releases in case they're out-of-order
+	sort.Strings(releases)
+
+	return releases[len(releases)-1], nil
 }

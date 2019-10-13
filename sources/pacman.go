@@ -28,8 +28,8 @@ func (s *Pacman) Run(definition shared.Definition, rootfsDir string) error {
 
 	args = append(args, "--noconfirm", "--root", rootfsDir, "-Sy")
 
-	if len(definition.Source.Packages) > 0 {
-		args = append(args, definition.Source.Packages...)
+	if len(definition.Source.EarlyPackages) > 0 {
+		args = append(args, definition.Source.EarlyPackages...)
 	} else {
 		args = append(args, "base")
 	}

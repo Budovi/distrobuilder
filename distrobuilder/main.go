@@ -59,8 +59,10 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
@@ -73,10 +75,12 @@ type cmdGlobal struct {
 	flagCleanup  bool
 	flagCacheDir string
 	flagOptions  []string
+	flagTimeout  uint
 
 	definition *shared.Definition
 	sourceDir  string
 	targetDir  string
+	interrupt  chan os.Signal
 }
 
 func main() {
@@ -113,6 +117,8 @@ func main() {
 		"", "Cache directory"+"``")
 	app.PersistentFlags().StringSliceVarP(&globalCmd.flagOptions, "options", "o",
 		[]string{}, "Override options (list of key=value)"+"``")
+	app.PersistentFlags().UintVarP(&globalCmd.flagTimeout, "timeout", "t", 0,
+		"Timeout in seconds"+"``")
 
 	// LXC sub-commands
 	LXCCmd := cmdLXC{global: &globalCmd}
@@ -128,16 +134,51 @@ func main() {
 	buildDirCmd := cmdBuildDir{global: &globalCmd}
 	app.AddCommand(buildDirCmd.command())
 
+	// Timeout handler
+	go func() {
+		// No timeout set
+		if globalCmd.flagTimeout == 0 {
+			return
+		}
+
+		time.Sleep(time.Duration(globalCmd.flagTimeout) * time.Second)
+		fmt.Println("Timed out")
+		os.Exit(1)
+	}()
+
+	go func() {
+		<-globalCmd.interrupt
+
+		// exit all chroots otherwise we cannot remove the cache directory
+		for _, exit := range shared.ActiveChroots {
+			if exit != nil {
+				exit()
+			}
+		}
+
+		globalCmd.postRun(nil, nil)
+		fmt.Println("Interrupted")
+		os.Exit(1)
+	}()
+
+	globalCmd.interrupt = make(chan os.Signal, 1)
+	signal.Notify(globalCmd.interrupt, os.Interrupt)
+
 	// Run the main command and handle errors
 	err := app.Execute()
 	if err != nil {
+		globalCmd.postRun(nil, nil)
 		os.Exit(1)
 	}
 }
 
 func (c *cmdGlobal) preRunBuild(cmd *cobra.Command, args []string) error {
+	// if an error is returned, disable the usage message
+	cmd.SilenceUsage = true
+
 	// Clean up cache directory before doing anything
 	os.RemoveAll(c.flagCacheDir)
+	os.Mkdir(c.flagCacheDir, 0755)
 
 	if len(args) > 1 {
 		// Create and set target directory if provided
@@ -194,7 +235,7 @@ func (c *cmdGlobal) preRunBuild(cmd *cobra.Command, args []string) error {
 	}
 
 	// Setup the mounts and chroot into the rootfs
-	exitChroot, err := setupChroot(c.sourceDir)
+	exitChroot, err := shared.SetupChroot(c.sourceDir, c.definition.Environment)
 	if err != nil {
 		return fmt.Errorf("Failed to setup chroot: %s", err)
 	}
@@ -211,7 +252,8 @@ func (c *cmdGlobal) preRunBuild(cmd *cobra.Command, args []string) error {
 
 	// Install/remove/update packages
 	err = managePackages(c.definition.Packages,
-		c.definition.GetRunnableActions("post-update"))
+		c.definition.GetRunnableActions("post-update"), c.definition.Image.Release,
+		c.definition.Image.ArchitectureMapped, c.definition.Image.Variant)
 	if err != nil {
 		return fmt.Errorf("Failed to manage packages: %s", err)
 	}
@@ -232,6 +274,7 @@ func (c *cmdGlobal) preRunPack(cmd *cobra.Command, args []string) error {
 
 	// Clean up cache directory before doing anything
 	os.RemoveAll(c.flagCacheDir)
+	os.Mkdir(c.flagCacheDir, 0755)
 
 	// resolve path
 	c.sourceDir, err = filepath.Abs(args[1])

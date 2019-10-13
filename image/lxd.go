@@ -93,7 +93,8 @@ func (l *LXDImage) Build(unified bool, compression string) error {
 	} else {
 		// Create rootfs as squashfs.
 		err = shared.RunCommand("mksquashfs", l.sourceDir,
-			filepath.Join(l.targetDir, "rootfs.squashfs"), "-noappend")
+			filepath.Join(l.targetDir, "rootfs.squashfs"), "-noappend", "-comp",
+			"xz", "-b", "1M", "-no-progress", "-no-recovery")
 		if err != nil {
 			return err
 		}
@@ -122,8 +123,8 @@ func (l *LXDImage) createMetadata() error {
 
 	l.Metadata.Properties["description"], err = shared.RenderTemplate(
 		l.definition.Image.Description, l.definition)
-	if err != err {
-		return nil
+	if err != nil {
+		return err
 	}
 
 	l.Metadata.Properties["name"], err = shared.RenderTemplate(

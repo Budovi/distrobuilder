@@ -1,13 +1,13 @@
 image:
   distribution: manjaro
-  release: 17.1.7
+  release: 18.0.1
   description: Manjaro Linux
   expiry: 30d
   architecture: x86_64
 
 source:
   downloader: pacman
-  packages:
+  early_packages:
       - bash
       - bzip2
       - coreutils
