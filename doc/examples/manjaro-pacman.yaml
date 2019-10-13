@@ -1,0 +1,85 @@
+image:
+  distribution: manjaro
+  release: 17.1.7
+  description: Manjaro Linux
+  expiry: 30d
+  architecture: x86_64
+
+source:
+  downloader: pacman
+  packages:
+      - bash
+      - bzip2
+      - coreutils
+      - dhclient
+      - file
+      - filesystem
+      - findutils
+      - gawk
+      - gcc-libs
+      - gettext
+      - glibc
+      - grep
+      - gzip
+      - iproute2
+      - iputils
+      - less
+      - licenses
+      - logrotate
+      - manjaro-release
+      - mdadm
+      - nano
+      - pacman
+      - perl
+      - psmisc
+      - sed
+      - shadow
+      - systemd-sysvcompat
+      - tar
+      - util-linux
+      - vim
+      - which
+
+targets:
+  lxc:
+    create-message: |
+      You just created a Manjaro Linux container (release={{ image.release }}, arch={{ image.architecture }})
+
+    config:
+      - type: all
+        before: 5
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/archlinux.common.conf
+
+      - type: user
+        before: 5
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/archlinux.userns.conf
+
+      - type: all
+        after: 4
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/common.conf
+
+      - type: user
+        after: 4
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/userns.conf
+
+      - type: all
+        content: |-
+          lxc.arch = {{ image.architecture_kernel }}
+
+files:
+  - name: hostname
+    path: /etc/hostname
+    generator: hostname
+
+  - name: hosts
+    path: /etc/hosts
+    generator: hosts
+
+packages:
+  manager: pacman
+
+  update: false
