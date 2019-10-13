@@ -188,6 +188,7 @@ func (d *Definition) Validate() error {
 		"debootstrap",
 		"fedora-http",
 		"gentoo-http",
+		"manjaro-bootstrap",
 		"ubuntu-http",
 	}
 	if !shared.StringInSlice(strings.TrimSpace(d.Source.Downloader), validDownloaders) {
